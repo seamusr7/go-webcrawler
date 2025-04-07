@@ -1,5 +1,30 @@
-# Ignore executables and temp files
+# Go build artifacts
+bin/
 *.exe
-*.out
+*.dll
+*.so
+*.dylib
+*.test
+
+# Vendor folder (if you use go mod vendor)
+vendor/
+
+# Dependency directories (used with older versions of Go)
+Godeps/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs or temp files
 *.log
 *.tmp
+
+# Git credentials or secrets (just in case)
+.env
+config.json

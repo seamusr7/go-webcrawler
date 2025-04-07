@@ -1,35 +1,46 @@
-// main.go - SEO Web Crawler
-// Entry point for SEO-focused web crawler using modular structure.
-
-package main
+// worker.go - Worker logic for handling crawl jobs
+package crawler
 
 import (
 	"fmt"
 	"sync"
-
-	"github.com/seamusr7/go-webcrawler/crawler"
-	"github.com/seamusr7/go-webcrawler/report"
 )
 
-func main() {
-	startURL := "https://golang.org"
-	maxPages := 50
+// Worker pulls jobs from the job channel, crawls the page, and sends results back
+func Worker(id int, jobs <-chan [2]string, pageResults chan<- PageInfo, linkResults chan<- []string, wg *sync.WaitGroup) {
+	for job := range jobs {
+		url := job[0]
+		referrer := job[1]
+
+		pageInfo, links, err := Crawl(url, referrer)
+		if err != nil {
+			fmt.Printf("❌ Worker %d error: %s\n", id, err)
+			wg.Done()
+			continue
+		}
+
+		pageResults <- pageInfo
+		linkResults <- links
+		wg.Done()
+	}
+}
+
+func StartCrawling(startURL string, maxPages int) []PageInfo {
+	var (
+		visited   = make(map[string]bool)
+		visitedMu sync.Mutex
+	)
 
 	jobChan := make(chan [2]string, 100)
-	pageResults := make(chan crawler.PageInfo, 100)
+	pageResults := make(chan PageInfo, 100)
 	linkResults := make(chan []string, 100)
 	done := make(chan struct{})
 
 	var wg sync.WaitGroup
 	var managerWg sync.WaitGroup
-
-	var allPages []crawler.PageInfo
+	var allPages []PageInfo
 	var resultsMu sync.Mutex
 
-	visited := make(map[string]bool)
-	var visitedMu sync.Mutex
-
-	// Manager goroutine for handling results and new links
 	managerWg.Add(1)
 	go func() {
 		defer managerWg.Done()
@@ -44,7 +55,7 @@ func main() {
 					if !visited[link] && len(allPages) < maxPages {
 						visited[link] = true
 						wg.Add(1)
-						jobChan <- [2]string{link, "referrer unknown"}
+						jobChan <- [2]string{link, ""}
 					}
 					visitedMu.Unlock()
 				}
@@ -63,28 +74,25 @@ func main() {
 		}
 	}()
 
-	// Start crawling from the initial URL
 	visitedMu.Lock()
 	visited[startURL] = true
 	visitedMu.Unlock()
 	wg.Add(1)
 	jobChan <- [2]string{startURL, ""}
 
-	// Launch worker goroutines
 	numWorkers := 5
 	for i := 0; i < numWorkers; i++ {
-		go crawler.Worker(i, jobChan, pageResults, linkResults, &wg)
+		go Worker(i, jobChan, pageResults, linkResults, &wg)
 	}
 
-	// Wait for all crawl jobs to complete
 	wg.Wait()
+
 	close(done)
 	managerWg.Wait()
-
 	close(jobChan)
 	close(linkResults)
 	close(pageResults)
 
 	fmt.Println("\n✅ Done crawling.")
-	report.Generate(allPages)
+	return allPages
 }
