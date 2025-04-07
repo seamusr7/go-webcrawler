@@ -1,0 +1,5 @@
+# Ignore executables and temp files
+*.exe
+*.out
+*.log
+*.tmp
