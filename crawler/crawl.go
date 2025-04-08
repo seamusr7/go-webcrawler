@@ -1,27 +1,58 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
-	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
+	"github.com/chromedp/chromedp"
 	"golang.org/x/net/html"
 )
 
-// Crawl fetches a webpage, parses its DOM, and extracts SEO-relevant data.
+func fetchRenderedHTML(targetURL string) (string, error) {
+	edgePath := `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` // Update path if needed
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(edgePath),
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+	)
+
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	var htmlContent string
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(targetURL),
+		chromedp.Sleep(2*time.Second), // Let JS finish rendering
+		chromedp.OuterHTML("html", &htmlContent),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return htmlContent, nil
+}
+
 func Crawl(currentURL, referrer string) (PageInfo, []string, error) {
 	fmt.Println("✨ Crawling:", currentURL)
 
-	resp, err := http.Get(currentURL)
+	htmlContent, err := fetchRenderedHTML(currentURL)
 	if err != nil {
 		return PageInfo{URL: currentURL, Referrer: referrer, StatusCode: 0}, nil, err
 	}
-	defer resp.Body.Close()
 
-	statusCode := resp.StatusCode
-	doc, err := html.Parse(resp.Body)
+	doc, err := html.Parse(strings.NewReader(htmlContent))
 	if err != nil {
-		return PageInfo{URL: currentURL, Referrer: referrer, StatusCode: statusCode}, nil, err
+		return PageInfo{URL: currentURL, Referrer: referrer, StatusCode: 200}, nil, err
 	}
 
 	base, _ := url.Parse(currentURL)
@@ -35,7 +66,6 @@ func Crawl(currentURL, referrer string) (PageInfo, []string, error) {
 	var hasMain, hasNav, hasFooter, hasHeader bool
 	var inlineStyleTags, inlineScriptTags, structuredDataCount int
 
-	// Traverse DOM
 	var crawler func(*html.Node)
 	crawler = func(n *html.Node) {
 		if n.Type == html.ElementNode {
@@ -150,11 +180,10 @@ func Crawl(currentURL, referrer string) (PageInfo, []string, error) {
 	}
 	crawler(doc)
 
-	// Construct result
 	return PageInfo{
 		URL:                 currentURL,
 		Referrer:            referrer,
-		StatusCode:          statusCode,
+		StatusCode:          200,
 		Title:               title,
 		Description:         description,
 		H1Count:             h1Count,

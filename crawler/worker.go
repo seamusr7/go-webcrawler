@@ -1,4 +1,3 @@
-// worker.go - Worker logic for handling crawl jobs
 package crawler
 
 import (
@@ -25,73 +24,65 @@ func Worker(id int, jobs <-chan [2]string, pageResults chan<- PageInfo, linkResu
 	}
 }
 
+// StartCrawling initializes the crawl, manages workers, and collects results
 func StartCrawling(startURL string, maxPages int) []PageInfo {
 	var (
-		visited   = make(map[string]bool)
-		visitedMu sync.Mutex
+		visited     = make(map[string]bool)
+		visitedMu   sync.Mutex
+		resultsMu   sync.Mutex
+		allPages    []PageInfo
+		jobChan     = make(chan [2]string, 100)
+		pageResults = make(chan PageInfo, 100)
+		linkResults = make(chan []string, 100)
+		wg          sync.WaitGroup
 	)
 
-	jobChan := make(chan [2]string, 100)
-	pageResults := make(chan PageInfo, 100)
-	linkResults := make(chan []string, 100)
-	done := make(chan struct{})
-
-	var wg sync.WaitGroup
-	var managerWg sync.WaitGroup
-	var allPages []PageInfo
-	var resultsMu sync.Mutex
-
-	managerWg.Add(1)
-	go func() {
-		defer managerWg.Done()
-		for {
-			select {
-			case links, ok := <-linkResults:
-				if !ok {
-					return
-				}
-				for _, link := range links {
-					visitedMu.Lock()
-					if !visited[link] && len(allPages) < maxPages {
-						visited[link] = true
-						wg.Add(1)
-						jobChan <- [2]string{link, ""}
-					}
-					visitedMu.Unlock()
-				}
-			case page, ok := <-pageResults:
-				if !ok {
-					return
-				}
-				resultsMu.Lock()
-				if len(allPages) < maxPages {
-					allPages = append(allPages, page)
-				}
-				resultsMu.Unlock()
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	visitedMu.Lock()
+	// Seed first job
 	visited[startURL] = true
-	visitedMu.Unlock()
 	wg.Add(1)
 	jobChan <- [2]string{startURL, ""}
 
+	// Start 5 workers
 	numWorkers := 5
 	for i := 0; i < numWorkers; i++ {
 		go Worker(i, jobChan, pageResults, linkResults, &wg)
 	}
 
-	wg.Wait()
+	// Collector goroutine
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
-	close(done)
-	managerWg.Wait()
+	// Process results as they come in
+LOOP:
+	for {
+		select {
+		case page := <-pageResults:
+			resultsMu.Lock()
+			if len(allPages) < maxPages {
+				allPages = append(allPages, page)
+			}
+			resultsMu.Unlock()
+
+		case links := <-linkResults:
+			for _, link := range links {
+				visitedMu.Lock()
+				if !visited[link] && len(allPages) < maxPages {
+					visited[link] = true
+					wg.Add(1)
+					jobChan <- [2]string{link, ""}
+				}
+				visitedMu.Unlock()
+			}
+		case <-done:
+			break LOOP
+		}
+	}
+
 	close(jobChan)
-	close(linkResults)
-	close(pageResults)
+	// ⚠️ Do NOT close pageResults or linkResults — workers may still be writing!
 
 	fmt.Println("\n✅ Done crawling.")
 	return allPages
